@@ -14,8 +14,6 @@ def map_tcp_udp_error(error):
         return 'TIMED OUT'
     elif error.errno == socket.errno.EHOSTUNREACH:
         return 'HOST IS UNREACHABLE'
-    elif error.errno == socket.errno.ENOTFOUND:
-        return 'HOST NOT FOUND'
     elif error.errno == socket.errno.ECONNRESET:
         return 'RESET BY PEER'
     else:
@@ -57,7 +55,7 @@ def http_check():
         return jsonify({
             'status': 'failure',
             'url': formatted_url,
-            'error': f'{e.response.status_code if e.response else 500} - {e.response.reason if e.response else "Unknown Error"}',
+            'error': f'{e.response.status_code if e.response else 500} - {e.response.reason if e.response else "Connection Timed Out."}',
             'dateChecked': datetime.datetime.now().isoformat()
         })
 
